@@ -1,0 +1,10 @@
+#!/bin/sh /etc/rc.common
+# Copyright (c) 2011-2015 OpenWrt.org
+
+START=99
+
+restart(){
+	/etc/init.d/firewall restart
+}
+
+

@@ -8,21 +8,23 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=dnsmasq
-PKG_VERSION:=2.78
-PKG_RELEASE:=2
+PKG_VERSION:=2.80test7
+PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.xz
-PKG_SOURCE_URL:=http://thekelleys.org.uk/dnsmasq/
-PKG_HASH:=89949f438c74b0c7543f06689c319484bd126cc4b1f8c745c742ab397681252b
+PKG_SOURCE_URL:=http://thekelleys.org.uk/dnsmasq/test-releases
+PKG_HASH:=f4e1277504097429279d2702cd8a132f54a47540ea3935d9fc6ac70f690441b3
 
 PKG_LICENSE:=GPL-2.0
 PKG_LICENSE_FILES:=COPYING
+PKG_CPE_ID:=cpe:/a:thekelleys:dnsmasq
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(BUILD_VARIANT)/$(PKG_NAME)-$(PKG_VERSION)
 
 PKG_INSTALL:=1
 PKG_BUILD_PARALLEL:=1
-PKG_CONFIG_DEPENDS:=CONFIG_PACKAGE_dnsmasq_$(BUILD_VARIANT)_dhcpv6 \
+PKG_CONFIG_DEPENDS:= CONFIG_PACKAGE_dnsmasq_$(BUILD_VARIANT)_dhcp \
+	CONFIG_PACKAGE_dnsmasq_$(BUILD_VARIANT)_dhcpv6 \
 	CONFIG_PACKAGE_dnsmasq_$(BUILD_VARIANT)_dnssec \
 	CONFIG_PACKAGE_dnsmasq_$(BUILD_VARIANT)_auth \
 	CONFIG_PACKAGE_dnsmasq_$(BUILD_VARIANT)_ipset \
@@ -51,6 +53,7 @@ $(call Package/dnsmasq/Default)
   TITLE += (with DHCPv6 support)
   DEPENDS+=@IPV6
   VARIANT:=dhcpv6
+  PROVIDES:=dnsmasq
 endef
 
 define Package/dnsmasq-full
@@ -60,6 +63,7 @@ $(call Package/dnsmasq/Default)
 	+PACKAGE_dnsmasq_full_ipset:kmod-ipt-ipset \
 	+PACKAGE_dnsmasq_full_conntrack:libnetfilter-conntrack
   VARIANT:=full
+  PROVIDES:=dnsmasq
 endef
 
 define Package/dnsmasq/description
@@ -75,8 +79,8 @@ endef
 define Package/dnsmasq-full/description
 $(call Package/dnsmasq/description)
 
-This is a fully configurable variant with DHCPv6, DNSSEC, Authoritative DNS and
-IPset, Conntrack support & NO_ID enabled by default.
+This is a fully configurable variant with DHCPv4, DHCPv6, DNSSEC, Authoritative DNS
+and IPset, Conntrack support & NO_ID enabled by default.
 endef
 
 define Package/dnsmasq/conffiles
@@ -86,9 +90,12 @@ endef
 
 define Package/dnsmasq-full/config
 	if PACKAGE_dnsmasq-full
+	config PACKAGE_dnsmasq_full_dhcp
+		bool "Build with DHCP support."
+		default y
 	config PACKAGE_dnsmasq_full_dhcpv6
 		bool "Build with DHCPv6 support."
-		depends on IPV6
+		depends on IPV6 && PACKAGE_dnsmasq_full_dhcp
 		default n
 	config PACKAGE_dnsmasq_full_dnssec
 		bool "Build with DNSSEC support."
@@ -117,14 +124,16 @@ Package/dnsmasq-full/conffiles = $(Package/dnsmasq/conffiles)
 TARGET_CFLAGS += -ffunction-sections -fdata-sections
 TARGET_LDFLAGS += -Wl,--gc-sections
 
-COPTS = $(if $(CONFIG_IPV6),,-DNO_IPV6)
+COPTS = -DHAVE_UBUS \
+	$(if $(CONFIG_IPV6),,-DNO_IPV6)
 
 ifeq ($(BUILD_VARIANT),nodhcpv6)
 	COPTS += -DNO_DHCP6
 endif
 
 ifeq ($(BUILD_VARIANT),full)
-	COPTS += $(if $(CONFIG_PACKAGE_dnsmasq_$(BUILD_VARIANT)_dhcpv6),,-DNO_DHCP6) \
+	COPTS += $(if $(CONFIG_PACKAGE_dnsmasq_$(BUILD_VARIANT)_dhcp),,-DNO_DHCP) \
+		$(if $(CONFIG_PACKAGE_dnsmasq_$(BUILD_VARIANT)_dhcpv6),,-DNO_DHCP6) \
 		$(if $(CONFIG_PACKAGE_dnsmasq_$(BUILD_VARIANT)_dnssec),-DHAVE_DNSSEC) \
 		$(if $(CONFIG_PACKAGE_dnsmasq_$(BUILD_VARIANT)_auth),,-DNO_AUTH) \
 		$(if $(CONFIG_PACKAGE_dnsmasq_$(BUILD_VARIANT)_ipset),,-DNO_IPSET) \
