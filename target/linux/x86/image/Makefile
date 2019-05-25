@@ -45,12 +45,12 @@ ifneq ($(GRUB_TERMINALS),)
 endif
 
 SIGNATURE:=$(shell perl -e 'printf("%08x", rand(0xFFFFFFFF))')
-EFI_SIGNATURE:=$(shell perl -e 'printf("%08x-%04x-%04x-%04x-%06x%06x", rand(0xFFFFFFFF), rand(0xFFFF), rand(0xFFFF), rand(0xFFFF), rand(0xFFFFFF), rand(0xFFFFFF))')
-
+EFI_SIGNATURE:=$(strip $(shell uuidgen | sed "s/[a-zA-Z0-9][a-zA-Z0-9][a-zA-Z0-9][a-zA-Z0-9]$$/0002/" | tr '[a-z]' '[A-Z]'))
 ROOTPART:=$(call qstrip,$(CONFIG_TARGET_ROOTFS_PARTNAME))
 ROOTPART:=$(if $(ROOTPART),$(ROOTPART),PARTUUID=$(SIGNATURE)-02)
 
 GRUB_TIMEOUT:=$(call qstrip,$(CONFIG_GRUB_TIMEOUT))
+GRUB_TITLE:=$(call qstrip,$(CONFIG_GRUB_TITLE))
 
 ifneq ($(CONFIG_TARGET_x86_xen_domu),)
   GRUB_ROOT = xen/xvda,msdos1
@@ -85,15 +85,20 @@ ifneq ($(CONFIG_GRUB_IMAGES)$(CONFIG_EFI_IMAGES),)
 		-e 's#@TERMINAL_CONFIG@#$(strip $(GRUB_TERMINAL_CONFIG))#g' \
 		-e 's#@CMDLINE@#$(strip $(call Image/cmdline/efi,$(1),$(EFI_SIGNATURE)) $(BOOTOPTS) $(GRUB_CONSOLE_CMDLINE))#g' \
 		-e 's#@TIMEOUT@#$(GRUB_TIMEOUT)#g' \
+		-e 's#@TITLE@#$(GRUB_TITLE)#g' \
 		-e 's#set root.*#search --file /boot/grub/$(SIGNATURE).cfg --set=root#g' \
 		./grub.cfg > $(KDIR)/root.grub/boot/grub/grub.cfg
+	sed \
+		-e 's/(hd0,msdos1)/(hd0,gpt1)/' ./grub-early.cfg > \
+			$(KDIR)/root.grub/boot/grub/grub-early.cfg
+
 	$(CP) $(KDIR)/root.grub/boot/grub/grub.cfg $(KDIR)/root.grub/boot/grub/$(SIGNATURE).cfg
 	grub-mkimage \
 		-d $(STAGING_DIR_HOST)/lib/grub/i386-pc \
 		-o $(KDIR)/grub2/core.img \
 		-O i386-pc \
 		-p '(hd0,gpt1)/boot/grub' \
-		-c $(KDIR)/root.grub/boot/grub/grub.cfg \
+		-c $(KDIR)/root.grub/boot/grub/grub-early.cfg \
 		$(GRUB2_MODULES_LEGACY)
 	$(CP) $(STAGING_DIR_HOST)/lib/grub/i386-pc/*.img $(KDIR)/grub2/
 
@@ -171,7 +176,9 @@ ifneq ($(CONFIG_GRUB_IMAGES)$(CONFIG_EFI_IMAGES),)
 		-e 's#@CMDLINE@#$(strip $(call Image/cmdline/$(1)) $(BOOTOPTS) $(GRUB_CONSOLE_CMDLINE))#g' \
 		-e 's#@TIMEOUT@#$(GRUB_TIMEOUT)#g' \
 		-e 's#@ROOT@#$(GRUB_ROOT)#g' \
+		-e 's#@TITLE@#$(GRUB_TITLE)#g' \
 		./grub.cfg > $(KDIR)/root.grub/boot/grub/grub.cfg
+	-$(CP) $(STAGING_DIR_ROOT)/boot/. $(KDIR)/root.grub/boot/
 	PADDING="$(CONFIG_TARGET_IMAGES_PAD)" SIGNATURE="$(SIGNATURE)" PATH="$(TARGET_PATH)" $(SCRIPT_DIR)/gen_image_generic.sh \
 		$(BIN_DIR)/$(IMG_PREFIX)-combined-$(1).img \
 		$(CONFIG_TARGET_KERNEL_PARTSIZE) $(KDIR)/root.grub \
@@ -210,7 +217,9 @@ define Image/Build/iso
 		-e 's#@TERMINAL_CONFIG@#$(strip $(GRUB_TERMINAL_CONFIG))#g' \
 		-e 's#@CMDLINE@#root=/dev/sr0 rootfstype=iso9660 rootwait $(strip $(call Image/cmdline/$(1)) $(BOOTOPTS) $(GRUB_CONSOLE_CMDLINE))#g' \
 		-e 's#@TIMEOUT@#$(GRUB_TIMEOUT)#g' \
+		-e 's#@TITLE@#$(GRUB_TITLE)#g' \
 		./grub-iso.cfg > $(KDIR)/root.grub/boot/grub/grub.cfg
+	-$(CP) $(STAGING_DIR_ROOT)/boot/. $(KDIR)/root.grub/boot/
 	mkisofs -R -b boot/grub/eltorito.img -no-emul-boot -boot-info-table \
 		-o $(KDIR)/root.iso $(KDIR)/root.grub $(TARGET_DIR)
 endef
@@ -246,6 +255,36 @@ ifneq ($(CONFIG_VMDK_IMAGES),)
 	qemu-img convert -f raw -O vmdk \
 		$(BIN_DIR)/$(IMG_PREFIX)-uefi-gpt-$(1).img \
 		$(BIN_DIR)/$(IMG_PREFIX)-uefi-gpt-$(1).vmdk
+  endef
+endif
+
+ifneq ($(CONFIG_VHD_IMAGES),)
+  define Image/Build/vhd
+	rm $(BIN_DIR)/$(IMG_PREFIX)-combined-$(1).vhdx || true
+	/usr/bin/qemu-img convert -O vhdx \
+		$(BIN_DIR)/$(IMG_PREFIX)-combined-$(1).img \
+		$(BIN_DIR)/$(IMG_PREFIX)-combined-$(1).vhdx
+  endef
+  define Image/Build/vhd_efi
+	rm $(BIN_DIR)/$(IMG_PREFIX)-uefi-gpt-$(1).vhdx || true
+	/usr/bin/qemu-img convert -O vhdx \
+		$(BIN_DIR)/$(IMG_PREFIX)-uefi-gpt-$(1).img \
+		$(BIN_DIR)/$(IMG_PREFIX)-uefi-gpt-$(1).vhdx
+  endef
+endif
+
+ifneq ($(CONFIG_QCOW2_IMAGES),)
+  define Image/Build/qcow2
+	rm $(BIN_DIR)/$(IMG_PREFIX)-combined-$(1).qcow2 || true
+	/usr/bin/qemu-img convert -O qcow2 \
+		$(BIN_DIR)/$(IMG_PREFIX)-combined-$(1).img \
+		$(BIN_DIR)/$(IMG_PREFIX)-combined-$(1).qcow2
+  endef
+  define Image/Build/qcow2_efi
+	rm $(BIN_DIR)/$(IMG_PREFIX)-uefi-gpt-$(1).qcow2 || true
+	/usr/bin/qemu-img convert -O qcow2 \
+		$(BIN_DIR)/$(IMG_PREFIX)-uefi-gpt-$(1).img \
+		$(BIN_DIR)/$(IMG_PREFIX)-uefi-gpt-$(1).qcow2
   endef
 endif
 
@@ -288,10 +327,14 @@ define Image/Build
 ifneq ($(CONFIG_GRUB_IMAGES),)
 	$(call Image/Build/vdi,$(1))
 	$(call Image/Build/vmdk,$(1))
+	$(call Image/Build/vhd,$(1))
+	$(call Image/Build/qcow2,$(1))
 endif
 ifneq ($(CONFIG_EFI_IMAGES),)
 	$(call Image/Build/vdi_efi,$(1))
 	$(call Image/Build/vmdk_efi,$(1))
+	$(call Image/Build/vhd_efi,$(1))
+	$(call Image/Build/qcow2_efi,$(1))
 endif
 	$(CP) $(KDIR)/root.$(1) $(BIN_DIR)/$(IMG_PREFIX)-rootfs-$(1).img
   else

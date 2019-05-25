@@ -1,7 +1,5 @@
-Index: hostapd-2017-08-24-c2d4f2eb/hostapd/Makefile
-===================================================================
---- hostapd-2017-08-24-c2d4f2eb.orig/hostapd/Makefile
-+++ hostapd-2017-08-24-c2d4f2eb/hostapd/Makefile
+--- a/hostapd/Makefile
++++ b/hostapd/Makefile
 @@ -165,6 +165,11 @@ OBJS += ../src/common/hw_features_common
  
  OBJS += ../src/eapol_auth/eapol_auth_sm.o
@@ -14,19 +12,17 @@ Index: hostapd-2017-08-24-c2d4f2eb/hostapd/Makefile
  
  ifdef CONFIG_CODE_COVERAGE
  CFLAGS += -O0 -fprofile-arcs -ftest-coverage
-Index: hostapd-2017-08-24-c2d4f2eb/src/ap/hostapd.h
-===================================================================
---- hostapd-2017-08-24-c2d4f2eb.orig/src/ap/hostapd.h
-+++ hostapd-2017-08-24-c2d4f2eb/src/ap/hostapd.h
+--- a/src/ap/hostapd.h
++++ b/src/ap/hostapd.h
 @@ -13,6 +13,7 @@
  #include "utils/list.h"
  #include "ap_config.h"
  #include "drivers/driver.h"
 +#include "ubus.h"
  
- struct wpa_ctrl_dst;
- struct radius_server_data;
-@@ -122,6 +123,7 @@ struct hostapd_data {
+ #define OCE_STA_CFON_ENABLED(hapd) \
+ 	((hapd->conf->oce & OCE_STA_CFON) && \
+@@ -136,6 +137,7 @@ struct hostapd_data {
  	struct hostapd_iface *iface;
  	struct hostapd_config *iconf;
  	struct hostapd_bss_config *conf;
@@ -34,20 +30,17 @@ Index: hostapd-2017-08-24-c2d4f2eb/src/ap/hostapd.h
  	int interface_added; /* virtual interface added for this BSS */
  	unsigned int started:1;
  	unsigned int disabled:1;
-@@ -370,6 +372,8 @@ struct hostapd_iface {
- 	struct hostapd_config *conf;
- 	char phy[16]; /* Name of the PHY (radio) */
- 
-+	struct hostapd_ubus_iface ubus;
-+
- 	enum hostapd_iface_state {
- 		HAPD_IFACE_UNINITIALIZED,
- 		HAPD_IFACE_DISABLED,
-Index: hostapd-2017-08-24-c2d4f2eb/src/ap/hostapd.c
-===================================================================
---- hostapd-2017-08-24-c2d4f2eb.orig/src/ap/hostapd.c
-+++ hostapd-2017-08-24-c2d4f2eb/src/ap/hostapd.c
-@@ -309,6 +309,7 @@ static void hostapd_free_hapd_data(struc
+@@ -547,6 +549,7 @@ hostapd_alloc_bss_data(struct hostapd_if
+ 		       struct hostapd_bss_config *bss);
+ int hostapd_setup_interface(struct hostapd_iface *iface);
+ int hostapd_setup_interface_complete(struct hostapd_iface *iface, int err);
++void hostapd_set_own_neighbor_report(struct hostapd_data *hapd);
+ void hostapd_interface_deinit(struct hostapd_iface *iface);
+ void hostapd_interface_free(struct hostapd_iface *iface);
+ struct hostapd_iface * hostapd_alloc_iface(void);
+--- a/src/ap/hostapd.c
++++ b/src/ap/hostapd.c
+@@ -373,6 +373,7 @@ static void hostapd_free_hapd_data(struc
  	hapd->started = 0;
  
  	wpa_printf(MSG_DEBUG, "%s(%s)", __func__, hapd->conf->iface);
@@ -55,7 +48,7 @@ Index: hostapd-2017-08-24-c2d4f2eb/src/ap/hostapd.c
  	iapp_deinit(hapd->iapp);
  	hapd->iapp = NULL;
  	accounting_deinit(hapd);
-@@ -1186,6 +1187,8 @@ static int hostapd_setup_bss(struct host
+@@ -1295,6 +1296,8 @@ static int hostapd_setup_bss(struct host
  	if (hapd->driver && hapd->driver->set_operstate)
  		hapd->driver->set_operstate(hapd->drv_priv, 1);
  
@@ -64,7 +57,16 @@ Index: hostapd-2017-08-24-c2d4f2eb/src/ap/hostapd.c
  	return 0;
  }
  
-@@ -1711,6 +1714,7 @@ static int hostapd_setup_interface_compl
+@@ -1709,7 +1712,7 @@ static enum nr_chan_width hostapd_get_nr
+ #endif /* NEED_AP_MLME */
+ 
+ 
+-static void hostapd_set_own_neighbor_report(struct hostapd_data *hapd)
++void hostapd_set_own_neighbor_report(struct hostapd_data *hapd)
+ {
+ #ifdef NEED_AP_MLME
+ 	u16 capab = hostapd_own_capab_info(hapd);
+@@ -1930,6 +1933,7 @@ static int hostapd_setup_interface_compl
  	if (err)
  		goto fail;
  
@@ -72,7 +74,7 @@ Index: hostapd-2017-08-24-c2d4f2eb/src/ap/hostapd.c
  	wpa_printf(MSG_DEBUG, "Completing interface initialization");
  	if (iface->conf->channel) {
  #ifdef NEED_AP_MLME
-@@ -1890,6 +1894,7 @@ dfs_offload:
+@@ -2110,6 +2114,7 @@ dfs_offload:
  
  fail:
  	wpa_printf(MSG_ERROR, "Interface initialization failed");
@@ -80,7 +82,7 @@ Index: hostapd-2017-08-24-c2d4f2eb/src/ap/hostapd.c
  	hostapd_set_state(iface, HAPD_IFACE_DISABLED);
  	wpa_msg(hapd->msg_ctx, MSG_INFO, AP_EVENT_DISABLED);
  #ifdef CONFIG_FST
-@@ -2344,6 +2349,7 @@ void hostapd_interface_deinit_free(struc
+@@ -2576,6 +2581,7 @@ void hostapd_interface_deinit_free(struc
  		   (unsigned int) iface->conf->num_bss);
  	driver = iface->bss[0]->driver;
  	drv_priv = iface->bss[0]->drv_priv;
@@ -88,11 +90,9 @@ Index: hostapd-2017-08-24-c2d4f2eb/src/ap/hostapd.c
  	hostapd_interface_deinit(iface);
  	wpa_printf(MSG_DEBUG, "%s: driver=%p drv_priv=%p -> hapd_deinit",
  		   __func__, driver, drv_priv);
-Index: hostapd-2017-08-24-c2d4f2eb/src/ap/ieee802_11.c
-===================================================================
---- hostapd-2017-08-24-c2d4f2eb.orig/src/ap/ieee802_11.c
-+++ hostapd-2017-08-24-c2d4f2eb/src/ap/ieee802_11.c
-@@ -1587,7 +1587,8 @@ ieee802_11_set_radius_info(struct hostap
+--- a/src/ap/ieee802_11.c
++++ b/src/ap/ieee802_11.c
+@@ -1759,12 +1759,13 @@ ieee802_11_set_radius_info(struct hostap
  
  
  static void handle_auth(struct hostapd_data *hapd,
@@ -102,7 +102,13 @@ Index: hostapd-2017-08-24-c2d4f2eb/src/ap/ieee802_11.c
  {
  	u16 auth_alg, auth_transaction, status_code;
  	u16 resp = WLAN_STATUS_SUCCESS;
-@@ -1603,6 +1604,11 @@ static void handle_auth(struct hostapd_d
+ 	struct sta_info *sta = NULL;
+-	int res, reply_res;
++	int res, reply_res, ubus_resp;
+ 	u16 fc;
+ 	const u8 *challenge = NULL;
+ 	u32 session_timeout, acct_interim_interval;
+@@ -1775,6 +1776,11 @@ static void handle_auth(struct hostapd_d
  	char *identity = NULL;
  	char *radius_cui = NULL;
  	u16 seq_ctrl;
@@ -114,20 +120,21 @@ Index: hostapd-2017-08-24-c2d4f2eb/src/ap/ieee802_11.c
  
  	if (len < IEEE80211_HDRLEN + sizeof(mgmt->u.auth)) {
  		wpa_printf(MSG_INFO, "handle_auth - too short payload (len=%lu)",
-@@ -1757,6 +1763,12 @@ static void handle_auth(struct hostapd_d
+@@ -1935,6 +1941,13 @@ static void handle_auth(struct hostapd_d
  		resp = WLAN_STATUS_UNSPECIFIED_FAILURE;
  		goto fail;
  	}
-+	if (hostapd_ubus_handle_event(hapd, &req)) {
++	ubus_resp = hostapd_ubus_handle_event(hapd, &req);
++	if (ubus_resp) {
 +		wpa_printf(MSG_DEBUG, "Station " MACSTR " rejected by ubus handler.\n",
 +			MAC2STR(mgmt->sa));
-+		resp = WLAN_STATUS_UNSPECIFIED_FAILURE;
++		resp = ubus_resp > 0 ? (u16) ubus_resp : WLAN_STATUS_UNSPECIFIED_FAILURE;
 +		goto fail;
 +	}
  	if (res == HOSTAPD_ACL_PENDING)
  		return;
  
-@@ -2870,7 +2882,7 @@ void fils_hlp_timeout(void *eloop_ctx, v
+@@ -3287,12 +3300,12 @@ void fils_hlp_timeout(void *eloop_ctx, v
  
  static void handle_assoc(struct hostapd_data *hapd,
  			 const struct ieee80211_mgmt *mgmt, size_t len,
@@ -136,7 +143,13 @@ Index: hostapd-2017-08-24-c2d4f2eb/src/ap/ieee802_11.c
  {
  	u16 capab_info, listen_interval, seq_ctrl, fc;
  	u16 resp = WLAN_STATUS_SUCCESS, reply_res;
-@@ -2884,6 +2896,11 @@ static void handle_assoc(struct hostapd_
+ 	const u8 *pos;
+-	int left, i;
++	int left, i, ubus_resp;
+ 	struct sta_info *sta;
+ 	u8 *tmp = NULL;
+ 	struct hostapd_sta_wpa_psk_short *psk = NULL;
+@@ -3301,6 +3314,11 @@ static void handle_assoc(struct hostapd_
  #ifdef CONFIG_FILS
  	int delay_assoc = 0;
  #endif /* CONFIG_FILS */
@@ -148,21 +161,22 @@ Index: hostapd-2017-08-24-c2d4f2eb/src/ap/ieee802_11.c
  
  	if (len < IEEE80211_HDRLEN + (reassoc ? sizeof(mgmt->u.reassoc_req) :
  				      sizeof(mgmt->u.assoc_req))) {
-@@ -3051,6 +3068,13 @@ static void handle_assoc(struct hostapd_
+@@ -3472,6 +3490,14 @@ static void handle_assoc(struct hostapd_
  	}
  #endif /* CONFIG_MBO */
  
-+	if (hostapd_ubus_handle_event(hapd, &req)) {
++	ubus_resp = hostapd_ubus_handle_event(hapd, &req);
++	if (ubus_resp) {
 +		wpa_printf(MSG_DEBUG, "Station " MACSTR " assoc rejected by ubus handler.\n",
 +		       MAC2STR(mgmt->sa));
-+		resp = WLAN_STATUS_UNSPECIFIED_FAILURE;
++		resp = ubus_resp > 0 ? (u16) ubus_resp : WLAN_STATUS_UNSPECIFIED_FAILURE;
 +		goto fail;
 +	}
 +
  	/*
  	 * sta->capability is used in check_assoc_ies() for RRM enabled
  	 * capability element.
-@@ -3258,6 +3282,7 @@ static void handle_disassoc(struct hosta
+@@ -3685,6 +3711,7 @@ static void handle_disassoc(struct hosta
  	wpa_printf(MSG_DEBUG, "disassocation: STA=" MACSTR " reason_code=%d",
  		   MAC2STR(mgmt->sa),
  		   le_to_host16(mgmt->u.disassoc.reason_code));
@@ -170,7 +184,7 @@ Index: hostapd-2017-08-24-c2d4f2eb/src/ap/ieee802_11.c
  
  	sta = ap_get_sta(hapd, mgmt->sa);
  	if (sta == NULL) {
-@@ -3323,6 +3348,8 @@ static void handle_deauth(struct hostapd
+@@ -3750,6 +3777,8 @@ static void handle_deauth(struct hostapd
  		" reason_code=%d",
  		MAC2STR(mgmt->sa), le_to_host16(mgmt->u.deauth.reason_code));
  
@@ -179,16 +193,16 @@ Index: hostapd-2017-08-24-c2d4f2eb/src/ap/ieee802_11.c
  	sta = ap_get_sta(hapd, mgmt->sa);
  	if (sta == NULL) {
  		wpa_msg(hapd->msg_ctx, MSG_DEBUG, "Station " MACSTR " trying "
-@@ -3637,7 +3664,7 @@ int ieee802_11_mgmt(struct hostapd_data
+@@ -4077,7 +4106,7 @@ int ieee802_11_mgmt(struct hostapd_data
  
  
  	if (stype == WLAN_FC_STYPE_PROBE_REQ) {
--		handle_probe_req(hapd, mgmt, len, fi->ssi_signal);
+-		handle_probe_req(hapd, mgmt, len, ssi_signal);
 +		handle_probe_req(hapd, mgmt, len, fi);
  		return 1;
  	}
  
-@@ -3657,17 +3684,17 @@ int ieee802_11_mgmt(struct hostapd_data
+@@ -4097,17 +4126,17 @@ int ieee802_11_mgmt(struct hostapd_data
  	switch (stype) {
  	case WLAN_FC_STYPE_AUTH:
  		wpa_printf(MSG_DEBUG, "mgmt::auth");
@@ -209,11 +223,9 @@ Index: hostapd-2017-08-24-c2d4f2eb/src/ap/ieee802_11.c
  		ret = 1;
  		break;
  	case WLAN_FC_STYPE_DISASSOC:
-Index: hostapd-2017-08-24-c2d4f2eb/src/ap/beacon.c
-===================================================================
---- hostapd-2017-08-24-c2d4f2eb.orig/src/ap/beacon.c
-+++ hostapd-2017-08-24-c2d4f2eb/src/ap/beacon.c
-@@ -716,7 +716,7 @@ void sta_track_claim_taxonomy_info(struc
+--- a/src/ap/beacon.c
++++ b/src/ap/beacon.c
+@@ -725,7 +725,7 @@ void sta_track_claim_taxonomy_info(struc
  
  void handle_probe_req(struct hostapd_data *hapd,
  		      const struct ieee80211_mgmt *mgmt, size_t len,
@@ -222,7 +234,7 @@ Index: hostapd-2017-08-24-c2d4f2eb/src/ap/beacon.c
  {
  	u8 *resp;
  	struct ieee802_11_elems elems;
-@@ -725,9 +725,15 @@ void handle_probe_req(struct hostapd_dat
+@@ -734,6 +734,7 @@ void handle_probe_req(struct hostapd_dat
  	size_t i, resp_len;
  	int noack;
  	enum ssid_match_result res;
@@ -230,15 +242,20 @@ Index: hostapd-2017-08-24-c2d4f2eb/src/ap/beacon.c
  	int ret;
  	u16 csa_offs[2];
  	size_t csa_offs_len;
+@@ -742,6 +743,12 @@ void handle_probe_req(struct hostapd_dat
+ 	struct hostapd_sta_wpa_psk_short *psk = NULL;
+ 	char *identity = NULL;
+ 	char *radius_cui = NULL;
 +	struct hostapd_ubus_request req = {
 +		.type = HOSTAPD_UBUS_PROBE_REQ,
 +		.mgmt_frame = mgmt,
 +		.frame_info = fi,
++		.elems = &elems,
 +	};
  
  	if (len < IEEE80211_HDRLEN)
  		return;
-@@ -894,6 +900,12 @@ void handle_probe_req(struct hostapd_dat
+@@ -919,6 +926,12 @@ void handle_probe_req(struct hostapd_dat
  	}
  #endif /* CONFIG_P2P */
  
@@ -251,10 +268,8 @@ Index: hostapd-2017-08-24-c2d4f2eb/src/ap/beacon.c
  	/* TODO: verify that supp_rates contains at least one matching rate
  	 * with AP configuration */
  
-Index: hostapd-2017-08-24-c2d4f2eb/src/ap/beacon.h
-===================================================================
---- hostapd-2017-08-24-c2d4f2eb.orig/src/ap/beacon.h
-+++ hostapd-2017-08-24-c2d4f2eb/src/ap/beacon.h
+--- a/src/ap/beacon.h
++++ b/src/ap/beacon.h
 @@ -14,7 +14,7 @@ struct ieee80211_mgmt;
  
  void handle_probe_req(struct hostapd_data *hapd,
@@ -264,10 +279,8 @@ Index: hostapd-2017-08-24-c2d4f2eb/src/ap/beacon.h
  int ieee802_11_set_beacon(struct hostapd_data *hapd);
  int ieee802_11_set_beacons(struct hostapd_iface *iface);
  int ieee802_11_update_beacons(struct hostapd_iface *iface);
-Index: hostapd-2017-08-24-c2d4f2eb/src/ap/drv_callbacks.c
-===================================================================
---- hostapd-2017-08-24-c2d4f2eb.orig/src/ap/drv_callbacks.c
-+++ hostapd-2017-08-24-c2d4f2eb/src/ap/drv_callbacks.c
+--- a/src/ap/drv_callbacks.c
++++ b/src/ap/drv_callbacks.c
 @@ -116,6 +116,10 @@ int hostapd_notif_assoc(struct hostapd_d
  	u16 reason = WLAN_REASON_UNSPECIFIED;
  	u16 status = WLAN_STATUS_SUCCESS;
@@ -292,11 +305,9 @@ Index: hostapd-2017-08-24-c2d4f2eb/src/ap/drv_callbacks.c
  #ifdef CONFIG_P2P
  	if (elems.p2p) {
  		wpabuf_free(sta->p2p_ie);
-Index: hostapd-2017-08-24-c2d4f2eb/src/ap/sta_info.c
-===================================================================
---- hostapd-2017-08-24-c2d4f2eb.orig/src/ap/sta_info.c
-+++ hostapd-2017-08-24-c2d4f2eb/src/ap/sta_info.c
-@@ -404,6 +404,7 @@ void ap_handle_timer(void *eloop_ctx, vo
+--- a/src/ap/sta_info.c
++++ b/src/ap/sta_info.c
+@@ -416,6 +416,7 @@ void ap_handle_timer(void *eloop_ctx, vo
  			       HOSTAPD_LEVEL_INFO, "deauthenticated due to "
  			       "local deauth request");
  		ap_free_sta(hapd, sta);
@@ -304,7 +315,7 @@ Index: hostapd-2017-08-24-c2d4f2eb/src/ap/sta_info.c
  		return;
  	}
  
-@@ -551,6 +552,7 @@ skip_poll:
+@@ -563,6 +564,7 @@ skip_poll:
  			hapd, sta,
  			WLAN_REASON_PREV_AUTH_NOT_VALID);
  		ap_free_sta(hapd, sta);
@@ -312,7 +323,7 @@ Index: hostapd-2017-08-24-c2d4f2eb/src/ap/sta_info.c
  		break;
  	}
  }
-@@ -1212,6 +1214,7 @@ void ap_sta_set_authorized(struct hostap
+@@ -1224,6 +1226,7 @@ void ap_sta_set_authorized(struct hostap
  					  buf, ip_addr);
  	} else {
  		wpa_msg(hapd->msg_ctx, MSG_INFO, AP_STA_DISCONNECTED "%s", buf);
@@ -320,15 +331,95 @@ Index: hostapd-2017-08-24-c2d4f2eb/src/ap/sta_info.c
  
  		if (hapd->msg_ctx_parent &&
  		    hapd->msg_ctx_parent != hapd->msg_ctx)
-Index: hostapd-2017-08-24-c2d4f2eb/src/ap/wpa_auth_glue.c
-===================================================================
---- hostapd-2017-08-24-c2d4f2eb.orig/src/ap/wpa_auth_glue.c
-+++ hostapd-2017-08-24-c2d4f2eb/src/ap/wpa_auth_glue.c
-@@ -175,6 +175,7 @@ static void hostapd_wpa_auth_psk_failure
+--- a/src/ap/wpa_auth_glue.c
++++ b/src/ap/wpa_auth_glue.c
+@@ -177,6 +177,7 @@ static void hostapd_wpa_auth_psk_failure
  	struct hostapd_data *hapd = ctx;
  	wpa_msg(hapd->msg_ctx, MSG_INFO, AP_STA_POSSIBLE_PSK_MISMATCH MACSTR,
  		MAC2STR(addr));
 +	hostapd_ubus_notify(hapd, "key-mismatch", addr);
  }
  
+ 
+--- a/wpa_supplicant/Makefile
++++ b/wpa_supplicant/Makefile
+@@ -189,6 +189,12 @@ ifdef CONFIG_EAPOL_TEST
+ CFLAGS += -Werror -DEAPOL_TEST
+ endif
+ 
++ifdef CONFIG_UBUS
++CFLAGS += -DUBUS_SUPPORT
++OBJS += ubus.o
++LIBS += -lubox -lubus
++endif
++
+ ifdef CONFIG_CODE_COVERAGE
+ CFLAGS += -O0 -fprofile-arcs -ftest-coverage
+ LIBS += -lgcov
+@@ -915,6 +921,9 @@ endif
+ ifdef CONFIG_IEEE80211AX
+ OBJS += ../src/ap/ieee802_11_he.o
+ endif
++ifdef CONFIG_UBUS
++OBJS += ../src/ap/ubus.o
++endif
+ endif
+ ifdef CONFIG_WNM_AP
+ CFLAGS += -DCONFIG_WNM_AP
+--- a/wpa_supplicant/wpa_supplicant.c
++++ b/wpa_supplicant/wpa_supplicant.c
+@@ -6080,6 +6080,8 @@ struct wpa_supplicant * wpa_supplicant_a
+ 	}
+ #endif /* CONFIG_P2P */
+ 
++	wpas_ubus_add_bss(wpa_s);
++
+ 	return wpa_s;
+ }
+ 
+@@ -6106,6 +6108,8 @@ int wpa_supplicant_remove_iface(struct w
+ 	struct wpa_supplicant *parent = wpa_s->parent;
+ #endif /* CONFIG_MESH */
+ 
++	wpas_ubus_free_bss(wpa_s);
++
+ 	/* Remove interface from the global list of interfaces */
+ 	prev = global->ifaces;
+ 	if (prev == wpa_s) {
+--- a/wpa_supplicant/wpa_supplicant_i.h
++++ b/wpa_supplicant/wpa_supplicant_i.h
+@@ -17,6 +17,7 @@
+ #include "wps/wps_defs.h"
+ #include "config_ssid.h"
+ #include "wmm_ac.h"
++#include "ubus.h"
+ 
+ extern const char *const wpa_supplicant_version;
+ extern const char *const wpa_supplicant_license;
+@@ -500,6 +501,7 @@ struct wpa_supplicant {
+ 	unsigned char own_addr[ETH_ALEN];
+ 	unsigned char perm_addr[ETH_ALEN];
+ 	char ifname[100];
++	struct wpas_ubus_bss ubus;
+ #ifdef CONFIG_MATCH_IFACE
+ 	int matched;
+ #endif /* CONFIG_MATCH_IFACE */
+--- a/wpa_supplicant/wps_supplicant.c
++++ b/wpa_supplicant/wps_supplicant.c
+@@ -33,6 +33,7 @@
+ #include "p2p/p2p.h"
+ #include "p2p_supplicant.h"
+ #include "wps_supplicant.h"
++#include "ubus.h"
+ 
+ 
+ #ifndef WPS_PIN_SCAN_IGNORE_SEL_REG
+@@ -388,6 +389,8 @@ static int wpa_supplicant_wps_cred(void
+ 	wpa_hexdump_key(MSG_DEBUG, "WPS: Received Credential attribute",
+ 			cred->cred_attr, cred->cred_attr_len);
+ 
++	wpas_ubus_notify(wpa_s, cred);
++
+ 	if (wpa_s->conf->wps_cred_processing == 1)
+ 		return 0;
  
